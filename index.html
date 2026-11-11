@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>모둠 활동 타이머</title>
+
+  <!-- =====================================================================
+       [선생님 설정 영역] 나중에 바꿀 값은 이 아래 한곳에서만 고치시면 됩니다.
+       (학생 이름이나 학번 등 개인정보는 일절 받지 않습니다.)
+       ===================================================================== -->
+  <script>
+    const TIMER_CONFIG = {
+      // 1. 화면 상단에 표시할 제목
+      TITLE: "모둠 활동 타이머",
+
+      // 2. 빠른 시간 선택 단추 목록 (단위: 분)
+      PRESET_MINUTES: [5, 10, 15],
+
+      // 3. 처음 열었을 때 기본으로 맞춰 둘 시간 (단위: 분)
+      DEFAULT_MINUTES: 5,
+
+      // 4. 경고 색상으로 바뀌는 기준 시간 (단위: 초) - 60초 = 1분 남았을 때 색 변경
+      WARNING_SECONDS: 60,
+
+      // 5. 직접 입력 칸에 넣을 수 있는 최대 시간 (단위: 분)
+      MAX_CUSTOM_MINUTES: 180,
+
+      // 6. 상태별 상단 안내 문구 (중학생 눈높이에 맞춘 간결하고 명확한 표현)
+      MESSAGES: {
+        READY: "시간을 정하고 [시작]을 눌러 주세요",
+        RUNNING: "모둠 활동 진행 중",
+        PAUSED: "일시정지 · 선생님을 주목해 주세요",
+        WARNING: "1분 남았습니다 · 활동을 마무리해 주세요",
+        FINISHED: "시간이 종료되었습니다 · 앞을 봐 주세요"
+      },
+
+      // 7. 알림음 설정 (외부 파일이나 인터넷 서버 없이 기기 자체에서 소리 생성)
+      SOUND: {
+        ENABLED_BY_DEFAULT: true,   // 처음 켰을 때 소리 켜짐 여부
+        PLAY_START_CUE: true,       // [시작]을 눌렀을 때 경쾌한 출발 신호음 울리기
+        PLAY_WARNING_CHIME: true,   // 1분 남았을 때 예비 알림음 울리기
+        FINISH_REPEAT_COUNT: 3,     // 종료 차임벨 멜로디 반복 횟수
+        VOLUME: 0.85                // 전체 소리 크기 (0.1 ~ 1.0)
+      }
+    };
+  </script>
+
+  <!-- 글꼴(Inter & 시스템 한글 고딕) 및 Tailwind CSS 불러오기 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;800;900&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body
+  id="appBody"
+  style="font-family: 'Inter', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;"
+  class="min-h-screen bg-slate-950 text-slate-100 select-none transition-colors duration-500 overflow-x-hidden"
+>
+  <!-- 전체 화면 레이아웃: 전자칠판(가로)과 휴대폰(세로) 모두 한 화면에 꽉 차게 배치 -->
+  <div class="min-h-screen max-w-6xl mx-auto flex flex-col justify-between p-3 sm:p-6 lg:p-8 gap-3 sm:gap-5">
+
+    <!-- 1. 상단 바: 깔끔한 제목 + 소리 켜기/끄기 단추 1개 -->
+    <header class="flex items-center justify-between gap-3 px-1">
+      <div class="flex items-center gap-2.5 sm:gap-3">
+        <span
+          id="liveIndicator"
+          class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-600 transition-all duration-300"
+          aria-hidden="true"
+        ></span>
+        <h1
+          id="appTitle"
+          class="text-xl sm:text-3xl lg:text-4xl font-black tracking-tight text-slate-100"
+        >
+          모둠 활동 타이머
+        </h1>
+      </div>
+
+      <!-- 소리 켜짐/꺼짐 단추 (누르면 소리 확인도 겸함) -->
+      <button
+        id="soundToggleBtn"
+        type="button"
+        class="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 font-bold text-base sm:text-xl px-4 py-2.5 sm:px-5 sm:py-3 rounded-2xl border-2 border-slate-700 transition-all shadow-sm"
+      >
+        <span id="soundIcon" aria-hidden="true">🔊</span>
+        <span id="soundLabel">소리 켜짐</span>
+      </button>
+    </header>
+
+    <!-- 2. 중앙 메인 타이머 전광판: 전자칠판 눈부심은 줄이고 숫자는 압도적으로 강조 -->
+    <main
+      id="timerCard"
+      class="flex-1 flex flex-col items-center justify-center bg-slate-900/95 rounded-3xl border-4 border-slate-800 px-4 py-6 sm:px-10 sm:py-8 transition-all duration-500 relative shadow-2xl"
+    >
+      <!-- 현재 상태 배지 -->
+      <div
+        id="statusBadge"
+        class="inline-flex items-center gap-2.5 px-5 py-2 sm:px-7 sm:py-3 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-extrabold text-base sm:text-2xl lg:text-3xl text-center transition-all duration-300 mb-2 sm:mb-4"
+      >
+        <span id="statusIcon" aria-hidden="true">⏱️</span>
+        <span id="statusMessage">시간을 정하고 [시작]을 눌러 주세요</span>
+      </div>
+
+      <!-- 초대형 남은 시간 디지털 표시 (tabular-nums로 숫자 흔들림 완벽 방지) -->
+      <div
+        id="timeDisplay"
+        role="timer"
+        aria-live="off"
+        class="font-black tabular-nums tracking-tight leading-none text-white text-[clamp(4.4rem,22vw,16rem)] my-2 sm:my-3 transition-all duration-300"
+      >
+        05:00
+      </div>
+
+      <!-- 시각적 진행 막대: 남은 시간의 양을 직관적으로 보여 줌 -->
+      <div class="w-full max-w-4xl mt-3 sm:mt-6">
+        <div
+          id="progressTrack"
+          class="w-full h-5 sm:h-7 lg:h-8 bg-slate-800 rounded-full overflow-hidden p-1 border border-slate-700/80 shadow-inner"
+        >
+          <div
+            id="progressBar"
+            class="h-full bg-sky-400 rounded-full transition-all duration-200 ease-linear"
+            style="width: 100%;"
+          ></div>
+        </div>
+        <div class="flex justify-between items-center mt-2 px-1 text-sm sm:text-lg lg:text-xl font-bold text-slate-400">
+          <span id="totalTimeInfo">설정 시간 5분</span>
+          <span id="percentInfo">100% 남음</span>
+        </div>
+      </div>
+
+      <!-- 입력 안내 등 짧은 알림 상자 (alert 창 대신 화면 내부에 깔끔하게 표시) -->
+      <div
+        id="toastBox"
+        class="hidden mt-4 px-5 py-2.5 rounded-2xl bg-sky-500 text-slate-950 font-extrabold text-base sm:text-xl shadow-lg text-center"
+      ></div>
+    </main>
+
+    <!-- 3. 하단 조작부: 꼭 필요한 실행 단추 2개 + 시간 설정 막대 -->
+    <section class="flex flex-col gap-3 sm:gap-4" aria-label="타이머 조작부">
+
+      <!-- 3-1. 주 실행 단추: [시작/일시정지] 와 [초기화] 딱 두 개로 명확하게 구성 -->
+      <div class="grid grid-cols-5 gap-3 sm:gap-4">
+        <button
+          id="startPauseBtn"
+          type="button"
+          class="col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-lg transition-all"
+        >
+          <span id="startPauseIcon" aria-hidden="true">▶</span>
+          <span id="startPauseText">시작</span>
+        </button>
+
+        <button
+          id="resetBtn"
+          type="button"
+          class="col-span-2 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 active:scale-[0.98] text-slate-200 font-extrabold text-xl sm:text-2xl lg:text-3xl rounded-2xl border-2 border-slate-700 shadow-md transition-all"
+        >
+          <span aria-hidden="true">↺</span>
+          <span>초기화</span>
+        </button>
+      </div>
+
+      <!-- 3-2. 시간 설정 독(Dock): [5분] [10분] [15분] + [직접 입력 칸]
+           타이머가 돌아가는 중에는 은은하게 어두워져 시선 분산을 막고, 터치하면 즉시 반응함 -->
+      <div
+        id="timeSettingDock"
+        class="bg-slate-900/90 rounded-3xl p-3 sm:p-4 border-2 border-slate-800 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 transition-opacity duration-300"
+      >
+        <!-- 5분, 10분, 15분 빠른 선택 단추 영역 -->
+        <div id="presetButtonsContainer" class="flex flex-1 gap-2.5 sm:gap-3">
+          <!-- TIMER_CONFIG.PRESET_MINUTES 기준으로 자동 생성 -->
+        </div>
+
+        <!-- 큰 화면 구분선 -->
+        <div class="hidden lg:block w-0.5 h-12 bg-slate-800 mx-1"></div>
+
+        <!-- 직접 분 입력 칸 -->
+        <form id="customTimeForm" class="flex items-center gap-2.5 sm:gap-3 flex-1 lg:max-w-md">
+          <label for="customMinutesInput" class="sr-only">직접 분 입력</label>
+          <div class="relative flex-1 flex items-center">
+            <input
+              id="customMinutesInput"
+              type="number"
+              min="1"
+              max="180"
+              step="1"
+              inputmode="numeric"
+              placeholder="직접 입력"
+              class="w-full h-14 sm:h-16 pl-4 pr-12 rounded-2xl border-2 border-slate-700 focus:border-sky-400 focus:outline-none bg-slate-950 text-white font-black text-xl sm:text-2xl text-center placeholder:text-slate-500 placeholder:font-bold transition-colors"
+            />
+            <span class="absolute right-4 text-lg sm:text-xl font-extrabold text-slate-400 pointer-events-none">
+              분
+            </span>
+          </div>
+          <button
+            type="submit"
+            class="h-14 sm:h-16 px-6 sm:px-8 bg-sky-500 hover:bg-sky-400 active:scale-95 text-slate-950 font-black text-xl sm:text-2xl rounded-2xl shadow-md transition-all shrink-0"
+          >
+            설정
+          </button>
+        </form>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- =====================================================================
+       타이머 제어 및 Web Audio 사운드 엔진
+       ===================================================================== -->
+  <script>
+    (function () {
+      "use strict";
+
+      // --- 1. 내부 상태 변수 ---
+      let selectedMinutes = TIMER_CONFIG.DEFAULT_MINUTES;        // 현재 선택된 기준 분
+      let totalDurationMs = selectedMinutes * 60 * 1000;         // 전체 설정 시간(ms)
+      let remainingMs = totalDurationMs;                         // 남은 시간(ms)
+      let endTimeStamp = null;                                   // 목표 종료 시각
+      let timerIntervalId = null;                                // 타이머 인터벌 ID
+      let isRunning = false;                                     // 작동 중 여부
+      let isFinished = false;                                    // 종료 도달 여부
+      let isAlarmPlaying = false;                                // 종료 차임벨이 현재 울리는 중인지 여부
+      let hasPlayedWarningChime = false;                         // 1분 전 알림음 재생 완료 여부
+      let soundEnabled = TIMER_CONFIG.SOUND.ENABLED_BY_DEFAULT;  // 소리 켜짐 상태
+      let audioCtx = null;                                       // 오디오 컨텍스트
+      let alarmTimeouts = [];                                    // 반복 알림 타이머 배열
+      let toastTimeoutId = null;                                 // 안내 문구 타이머 ID
+      let wakeLockSentinel = null;                               // 화면 꺼짐 방지 객체
+
+      // --- 2. DOM 요소 참조 ---
+      const appBody = document.getElementById("appBody");
+      const appTitle = document.getElementById("appTitle");
+      const liveIndicator = document.getElementById("liveIndicator");
+      const soundToggleBtn = document.getElementById("soundToggleBtn");
+      const soundIcon = document.getElementById("soundIcon");
+      const soundLabel = document.getElementById("soundLabel");
+
+      const timerCard = document.getElementById("timerCard");
+      const statusBadge = document.getElementById("statusBadge");
+      const statusIcon = document.getElementById("statusIcon");
+      const statusMessage = document.getElementById("statusMessage");
+      const timeDisplay = document.getElementById("timeDisplay");
+      const progressTrack = document.getElementById("progressTrack");
+      const progressBar = document.getElementById("progressBar");
+      const totalTimeInfo = document.getElementById("totalTimeInfo");
+      const percentInfo = document.getElementById("percentInfo");
+      const toastBox = document.getElementById("toastBox");
+
+      const startPauseBtn = document.getElementById("startPauseBtn");
+      const startPauseIcon = document.getElementById("startPauseIcon");
+      const startPauseText = document.getElementById("startPauseText");
+      const resetBtn = document.getElementById("resetBtn");
+      const timeSettingDock = document.getElementById("timeSettingDock");
+      const presetButtonsContainer = document.getElementById("presetButtonsContainer");
+      const customTimeForm = document.getElementById("customTimeForm");
+      const customMinutesInput = document.getElementById("customMinutesInput");
+
+      // --- 3. Web Audio API 음향 효과 (시작음 / 1분 전 예비음 / 종료 차임벨) ---
+
+      /**
+       * 사용자 터치/클릭 시 브라우저 오디오 컨텍스트를 활성화합니다.
+       */
+      function unlockAudio() {
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (!AudioCtx) return null;
+          if (!audioCtx) {
+            audioCtx = new AudioCtx();
+          }
+          if (audioCtx.state === "suspended") {
+            audioCtx.resume();
+          }
+          return audioCtx;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      /**
+       * 예약된 모든 반복 종료 알림음을 즉시 정지합니다.
+       */
+      function stopAllAlarms() {
+        while (alarmTimeouts.length > 0) {
+          clearTimeout(alarmTimeouts.pop());
+        }
+        isAlarmPlaying = false;
+      }
+
+      /**
+       * 풍부하고 선명한 차임벨 단일 음을 재생합니다.
+       */
+      function playTone(freq, delaySec, durationSec, gainLevel) {
+        const ctx = unlockAudio();
+        if (!ctx) return;
+
+        try {
+          const start = ctx.currentTime + delaySec;
+          const mainOsc = ctx.createOscillator();
+          const harmonicOsc = ctx.createOscillator();
+          const harmonicGain = ctx.createGain();
+          const masterGain = ctx.createGain();
+
+          // 기본 사인파 + 은은한 배음을 섞어 전자칠판 스피커에서도 또렷하게 들리도록 합성
+          mainOsc.type = "sine";
+          mainOsc.frequency.setValueAtTime(freq, start);
+
+          harmonicOsc.type = "triangle";
+          harmonicOsc.frequency.setValueAtTime(freq * 2, start);
+          harmonicGain.gain.setValueAtTime(0.15, start);
+
+          masterGain.gain.setValueAtTime(0.0001, start);
+          masterGain.gain.linearRampToValueAtTime(gainLevel, start + 0.02);
+          masterGain.gain.exponentialRampToValueAtTime(0.0001, start + durationSec);
+
+          mainOsc.connect(masterGain);
+          harmonicOsc.connect(harmonicGain);
+          harmonicGain.connect(masterGain);
+          masterGain.connect(ctx.destination);
+
+          mainOsc.start(start);
+          harmonicOsc.start(start);
+          mainOsc.stop(start + durationSec + 0.04);
+          harmonicOsc.stop(start + durationSec + 0.04);
+        } catch (e) {
+          // 오디오 오류 시 화면 동작에는 영향이 없도록 안전 처리
+        }
+      }
+
+      /**
+       * [시작 효과음] 활동 시작을 산뜻하게 알리는 상승 2음 ("띠-링!")
+       */
+      function playStartCue() {
+        if (!soundEnabled || !TIMER_CONFIG.SOUND.PLAY_START_CUE) return;
+        const vol = Math.min(1, Math.max(0.1, TIMER_CONFIG.SOUND.VOLUME)) * 0.4;
+        playTone(523.25, 0.0, 0.22, vol);  // 도(C5)
+        playTone(783.99, 0.11, 0.38, vol); // 솔(G5)
+      }
+
+      /**
+       * [시간 설정 확인음] 단추를 눌렀을 때 짧고 경쾌한 피드백 음
+       */
+      function playClickFeedback() {
+        if (!soundEnabled) return;
+        const vol = Math.min(1, Math.max(0.1, TIMER_CONFIG.SOUND.VOLUME)) * 0.22;
+        playTone(659.25, 0.0, 0.12, vol);
+      }
+
+      /**
+       * [1분 전 예비 알림음] 놀라지 않으면서 주의를 환기하는 차분한 2음 차임벨
+       */
+      function playWarningChime() {
+        if (!soundEnabled || !TIMER_CONFIG.SOUND.PLAY_WARNING_CHIME) return;
+        const vol = Math.min(1, Math.max(0.1, TIMER_CONFIG.SOUND.VOLUME)) * 0.55;
+        playTone(783.99, 0.0, 0.45, vol);  // 솔(G5)
+        playTone(659.25, 0.26, 0.65, vol); // 미(E5)
+      }
+
+      /**
+       * [종료 차임벨] 교실 전체에 또렷하게 퍼지는 4음 학교 차임벨 멜로디
+       */
+      function playFinishChimeSequence() {
+        stopAllAlarms();
+        if (!soundEnabled) return;
+
+        isAlarmPlaying = true;
+        const repeatCount = Math.max(1, TIMER_CONFIG.SOUND.FINISH_REPEAT_COUNT || 3);
+        const vol = Math.min(1, Math.max(0.1, TIMER_CONFIG.SOUND.VOLUME)) * 0.72;
+
+        const playMelodyOnce = () => {
+          if (!soundEnabled) return;
+          playTone(523.25, 0.0, 0.55, vol);   // 도(C5)
+          playTone(659.25, 0.30, 0.55, vol);  // 미(E5)
+          playTone(783.99, 0.60, 0.55, vol);  // 솔(G5)
+          playTone(1046.50, 0.90, 1.30, vol); // 높은 도(C6)
+        };
+
+        playMelodyOnce();
+        for (let i = 1; i < repeatCount; i++) {
+          const tid = setTimeout(playMelodyOnce, i * 2400);
+          alarmTimeouts.push(tid);
+        }
+
+        // 마지막 멜로디가 끝난 뒤 단추 문구를 자연스럽게 갱신
+        const endTid = setTimeout(() => {
+          isAlarmPlaying = false;
+          renderScreen();
+        }, repeatCount * 2400);
+        alarmTimeouts.push(endTid);
+      }
+
+      // --- 4. 화면 절전 방지 (전자칠판 및 휴대폰 화면 꺼짐 예방) ---
+      async function setScreenWakeLock(keepAwake) {
+        if (!("wakeLock" in navigator)) return;
+        try {
+          if (keepAwake && !wakeLockSentinel) {
+            wakeLockSentinel = await navigator.wakeLock.request("screen");
+            wakeLockSentinel.addEventListener("release", () => {
+              wakeLockSentinel = null;
+            });
+          } else if (!keepAwake && wakeLockSentinel) {
+            await wakeLockSentinel.release();
+            wakeLockSentinel = null;
+          }
+        } catch (e) {
+          // 권한 미지원 환경 무시
+        }
+      }
+
+      // --- 5. 화면 렌더링 및 단계별 시각 효과 ---
+
+      /**
+       * 짧은 안내 토스트 메시지를 보여 줍니다.
+       */
+      function showToast(text) {
+        if (toastTimeoutId) clearTimeout(toastTimeoutId);
+        toastBox.textContent = text;
+        toastBox.classList.remove("hidden");
+        toastTimeoutId = setTimeout(() => {
+          toastBox.classList.add("hidden");
+        }, 2400);
+      }
+
+      /**
+       * 초 단위를 'MM:SS' 문자열로 변환합니다.
+       */
+      function formatClock(totalSeconds) {
+        const sec = Math.max(0, totalSeconds);
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+      }
+
+      /**
+       * 숫자가 바뀔 때(시간 설정 또는 시작 순간) 짧은 시각 강조 효과를 줍니다.
+       */
+      function pulseDigitsOnce() {
+        timeDisplay.classList.add("scale-105");
+        setTimeout(() => {
+          timeDisplay.classList.remove("scale-105");
+        }, 200);
+      }
+
+      /**
+       * 선택된 빠른 시간 단추(5분/10분/15분)의 강조 표시를 업데이트합니다.
+       */
+      function updatePresetButtonsUI() {
+        const buttons = presetButtonsContainer.querySelectorAll("button[data-minutes]");
+        buttons.forEach((btn) => {
+          const min = Number(btn.getAttribute("data-minutes"));
+          const isMatched = min === selectedMinutes && totalDurationMs === min * 60 * 1000;
+          if (isMatched) {
+            btn.className =
+              "flex-1 h-14 sm:h-16 rounded-2xl font-black text-xl sm:text-2xl lg:text-3xl transition-all active:scale-95 bg-sky-400 text-slate-950 ring-2 ring-sky-200 shadow-lg";
+          } else {
+            btn.className =
+              "flex-1 h-14 sm:h-16 rounded-2xl font-extrabold text-xl sm:text-2xl lg:text-3xl transition-all active:scale-95 bg-slate-800 hover:bg-slate-700 text-slate-200 border-2 border-slate-700";
+          }
+        });
+      }
+
+      /**
+       * 타이머의 모든 시각 상태(대기 / 진행 / 일시정지 / 1분 전 경고 / 종료)를 화면에 반영합니다.
+       */
+      function renderScreen() {
+        const displaySec = Math.ceil(remainingMs / 1000);
+        timeDisplay.textContent = formatClock(displaySec);
+
+        // 100분 이상일 때 세 자리 분 숫자가 모바일 화면을 넘지 않도록 반응형 크기 조정
+        const sizeClass =
+          displaySec >= 6000
+            ? "text-[clamp(3.4rem,17vw,12.5rem)]"
+            : "text-[clamp(4.4rem,22vw,16rem)]";
+
+        // 진행률 계산
+        const ratio = totalDurationMs > 0 ? Math.max(0, Math.min(1, remainingMs / totalDurationMs)) : 0;
+        const percent = Math.round(ratio * 100);
+        progressBar.style.width = `${ratio * 100}%`;
+
+        const configuredMin = Math.round((totalDurationMs / 60000) * 10) / 10;
+        totalTimeInfo.textContent = `설정 시간 ${configuredMin}분`;
+        percentInfo.textContent = `${percent}% 남음`;
+
+        // 작동 중일 때 하단 시간 설정 독을 은은하게 낮춰 타이머에 시선 집중
+        if (isRunning) {
+          timeSettingDock.classList.add("opacity-45", "hover:opacity-100", "focus-within:opacity-100");
+        } else {
+          timeSettingDock.classList.remove("opacity-45", "hover:opacity-100", "focus-within:opacity-100");
+        }
+
+        // 1분 이하 경고 구간 판별 (초기 대기 상태 제외)
+        const isWarningState =
+          !isFinished &&
+          displaySec > 0 &&
+          displaySec <= TIMER_CONFIG.WARNING_SECONDS &&
+          (isRunning || remainingMs < totalDurationMs);
+
+        if (isFinished || displaySec === 0) {
+          // =========================================================
+          // [상태 4: 종료] 강렬한 로즈 레드 반전 + 깜빡임 알림
+          // =========================================================
+          appBody.className =
+            "min-h-screen bg-rose-950 text-white select-none transition-colors duration-500 overflow-x-hidden";
+          timerCard.className =
+            "flex-1 flex flex-col items-center justify-center bg-rose-900/50 rounded-3xl border-4 border-rose-400 px-4 py-6 sm:px-10 sm:py-8 transition-all duration-500 relative shadow-[0_0_100px_rgba(244,63,94,0.5)]";
+          liveIndicator.className =
+            "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-rose-400 animate-ping";
+
+          statusBadge.className =
+            "inline-flex items-center gap-2.5 px-6 py-2.5 sm:px-8 sm:py-3.5 rounded-full bg-rose-500 text-white font-black text-lg sm:text-2xl lg:text-3xl text-center transition-all duration-300 mb-2 sm:mb-4 shadow-lg";
+          statusIcon.textContent = "🔔";
+          statusMessage.textContent = TIMER_CONFIG.MESSAGES.FINISHED;
+
+          timeDisplay.className = `font-black tabular-nums tracking-tight leading-none text-white animate-pulse my-2 sm:my-3 transition-all duration-300 ${sizeClass}`;
+          progressTrack.className =
+            "w-full h-5 sm:h-7 lg:h-8 bg-rose-950/90 rounded-full overflow-hidden p-1 border border-rose-400/50 shadow-inner";
+          progressBar.className = "h-full bg-rose-400 rounded-full transition-all duration-200 ease-linear";
+
+          // 알림음이 울리는 중이면 즉시 멈추고 초기화할 수 있도록 안내
+          if (isAlarmPlaying) {
+            startPauseIcon.textContent = "🔔";
+            startPauseText.textContent = "알림 끄기 · 확인";
+            startPauseBtn.className =
+              "col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-white hover:bg-rose-50 active:scale-[0.98] text-rose-700 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-xl transition-all";
+          } else {
+            startPauseIcon.textContent = "▶";
+            startPauseText.textContent = "다시 시작";
+            startPauseBtn.className =
+              "col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-lg transition-all";
+          }
+        } else if (isWarningState) {
+          // =========================================================
+          // [상태 3: 1분 이하 남음] 배경과 숫자가 선명한 앰버 골드로 전환
+          // =========================================================
+          appBody.className =
+            "min-h-screen bg-amber-950 text-amber-50 select-none transition-colors duration-500 overflow-x-hidden";
+          timerCard.className =
+            "flex-1 flex flex-col items-center justify-center bg-slate-900/95 rounded-3xl border-4 border-amber-400 px-4 py-6 sm:px-10 sm:py-8 transition-all duration-500 relative shadow-[0_0_85px_-10px_rgba(251,191,36,0.45)]";
+          liveIndicator.className = isRunning
+            ? "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 animate-pulse"
+            : "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-500";
+
+          statusBadge.className =
+            "inline-flex items-center gap-2.5 px-6 py-2.5 sm:px-8 sm:py-3.5 rounded-full bg-amber-400 text-slate-950 font-black text-lg sm:text-2xl lg:text-3xl text-center transition-all duration-300 mb-2 sm:mb-4 shadow-md";
+          statusIcon.textContent = isRunning ? "⏰" : "⏸";
+          statusMessage.textContent = isRunning
+            ? TIMER_CONFIG.MESSAGES.WARNING
+            : TIMER_CONFIG.MESSAGES.PAUSED;
+
+          timeDisplay.className = `font-black tabular-nums tracking-tight leading-none text-amber-300 my-2 sm:my-3 transition-all duration-300 ${sizeClass}`;
+          progressTrack.className =
+            "w-full h-5 sm:h-7 lg:h-8 bg-slate-800 rounded-full overflow-hidden p-1 border border-amber-500/40 shadow-inner";
+          progressBar.className = "h-full bg-amber-400 rounded-full transition-all duration-200 ease-linear";
+
+          if (isRunning) {
+            startPauseIcon.textContent = "⏸";
+            startPauseText.textContent = "일시정지";
+            startPauseBtn.className =
+              "col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-amber-400 hover:bg-amber-300 active:scale-[0.98] text-slate-950 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-lg transition-all";
+          } else {
+            startPauseIcon.textContent = "▶";
+            startPauseText.textContent = "이어서 시작";
+            startPauseBtn.className =
+              "col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-lg transition-all";
+          }
+        } else if (isRunning) {
+          // =========================================================
+          // [상태 2: 활동 진행 중] 눈이 편안한 다크 배경 + 에메랄드 활성 점등
+          // =========================================================
+          appBody.className =
+            "min-h-screen bg-slate-950 text-slate-100 select-none transition-colors duration-500 overflow-x-hidden";
+          timerCard.className =
+            "flex-1 flex flex-col items-center justify-center bg-slate-900/95 rounded-3xl border-4 border-emerald-500/80 px-4 py-6 sm:px-10 sm:py-8 transition-all duration-500 relative shadow-[0_0_75px_-15px_rgba(16,185,129,0.35)]";
+          liveIndicator.className =
+            "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_12px_rgba(52,211,153,0.9)]";
+
+          statusBadge.className =
+            "inline-flex items-center gap-2.5 px-6 py-2.5 sm:px-8 sm:py-3.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-extrabold text-lg sm:text-2xl lg:text-3xl text-center transition-all duration-300 mb-2 sm:mb-4";
+          statusIcon.textContent = "🟢";
+          statusMessage.textContent = TIMER_CONFIG.MESSAGES.RUNNING;
+
+          timeDisplay.className = `font-black tabular-nums tracking-tight leading-none text-emerald-300 my-2 sm:my-3 transition-all duration-300 ${sizeClass}`;
+          progressTrack.className =
+            "w-full h-5 sm:h-7 lg:h-8 bg-slate-800 rounded-full overflow-hidden p-1 border border-slate-700 shadow-inner";
+          progressBar.className = "h-full bg-emerald-400 rounded-full transition-all duration-200 ease-linear";
+
+          startPauseIcon.textContent = "⏸";
+          startPauseText.textContent = "일시정지";
+          startPauseBtn.className =
+            "col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-amber-400 hover:bg-amber-300 active:scale-[0.98] text-slate-950 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-lg transition-all";
+        } else {
+          // =========================================================
+          // [상태 1: 준비 완료 및 일시정지] 깔끔하고 정돈된 고대비 다크 스탠바이
+          // =========================================================
+          const isPausedMidway = remainingMs < totalDurationMs;
+
+          appBody.className =
+            "min-h-screen bg-slate-950 text-slate-100 select-none transition-colors duration-500 overflow-x-hidden";
+          timerCard.className = isPausedMidway
+            ? "flex-1 flex flex-col items-center justify-center bg-slate-900/95 rounded-3xl border-4 border-sky-500/60 px-4 py-6 sm:px-10 sm:py-8 transition-all duration-500 relative shadow-2xl"
+            : "flex-1 flex flex-col items-center justify-center bg-slate-900/95 rounded-3xl border-4 border-slate-800 px-4 py-6 sm:px-10 sm:py-8 transition-all duration-500 relative shadow-2xl";
+          liveIndicator.className = isPausedMidway
+            ? "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-sky-400"
+            : "w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-600";
+
+          if (isPausedMidway) {
+            statusBadge.className =
+              "inline-flex items-center gap-2.5 px-6 py-2.5 sm:px-8 sm:py-3.5 rounded-full bg-sky-500/20 text-sky-300 border border-sky-500/40 font-extrabold text-lg sm:text-2xl lg:text-3xl text-center transition-all duration-300 mb-2 sm:mb-4";
+            statusIcon.textContent = "⏸";
+            statusMessage.textContent = TIMER_CONFIG.MESSAGES.PAUSED;
+          } else {
+            statusBadge.className =
+              "inline-flex items-center gap-2.5 px-6 py-2.5 sm:px-8 sm:py-3.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700 font-extrabold text-base sm:text-2xl lg:text-3xl text-center transition-all duration-300 mb-2 sm:mb-4";
+            statusIcon.textContent = "⏱️";
+            statusMessage.textContent = TIMER_CONFIG.MESSAGES.READY;
+          }
+
+          timeDisplay.className = `font-black tabular-nums tracking-tight leading-none text-white my-2 sm:my-3 transition-all duration-300 ${sizeClass}`;
+          progressTrack.className =
+            "w-full h-5 sm:h-7 lg:h-8 bg-slate-800 rounded-full overflow-hidden p-1 border border-slate-700/80 shadow-inner";
+          progressBar.className = "h-full bg-sky-400 rounded-full transition-all duration-200 ease-linear";
+
+          startPauseIcon.textContent = "▶";
+          startPauseText.textContent = isPausedMidway ? "이어서 시작" : "시작";
+          startPauseBtn.className =
+            "col-span-3 h-16 sm:h-20 lg:h-24 flex items-center justify-center gap-3 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.98] text-slate-950 font-black text-2xl sm:text-3xl lg:text-4xl rounded-2xl shadow-lg transition-all";
+        }
+
+        updatePresetButtonsUI();
+      }
+
+      // --- 6. 타이머 동작 제어 로직 ---
+
+      /**
+       * 실행 중인 인터벌을 정리합니다.
+       */
+      function clearTimerInterval() {
+        if (timerIntervalId !== null) {
+          clearInterval(timerIntervalId);
+          timerIntervalId = null;
+        }
+      }
+
+      /**
+       * 분 단위로 새로운 목표 시간을 설정합니다.
+       */
+      function setTimerMinutes(minutes, withFeedback = false) {
+        stopAllAlarms();
+        clearTimerInterval();
+
+        selectedMinutes = minutes;
+        totalDurationMs = Math.round(minutes * 60 * 1000);
+        remainingMs = totalDurationMs;
+        isRunning = false;
+        isFinished = false;
+        hasPlayedWarningChime = totalDurationMs <= TIMER_CONFIG.WARNING_SECONDS * 1000;
+
+        setScreenWakeLock(false);
+        renderScreen();
+
+        if (withFeedback) {
+          playClickFeedback();
+          pulseDigitsOnce();
+        }
+      }
+
+      /**
+       * 실제 시각(Date.now) 기반으로 오차 없이 남은 시간을 계산합니다.
+       */
+      function tick() {
+        if (!isRunning || endTimeStamp === null) return;
+
+        const diff = endTimeStamp - Date.now();
+
+        if (diff <= 0) {
+          remainingMs = 0;
+          isRunning = false;
+          isFinished = true;
+          clearTimerInterval();
+          setScreenWakeLock(false);
+          playFinishChimeSequence();
+          renderScreen();
+          return;
+        }
+
+        remainingMs = diff;
+        const currentCeilSec = Math.ceil(remainingMs / 1000);
+
+        // 정확히 1분(설정된 기준 초) 이하로 들어서는 순간 예비 알림음 재생
+        if (!hasPlayedWarningChime && currentCeilSec <= TIMER_CONFIG.WARNING_SECONDS) {
+          hasPlayedWarningChime = true;
+          playWarningChime();
+        }
+
+        renderScreen();
+      }
+
+      /**
+       * [시작 / 일시정지 / 종료 확인] 주 단추 클릭 처리
+       */
+      function handlePrimaryAction() {
+        unlockAudio();
+
+        // 종료 차임벨이 울리고 있을 때 누르면 즉시 소리를 끄고 초기 준비 상태로 복귀
+        if (isFinished && isAlarmPlaying) {
+          setTimerMinutes(selectedMinutes, false);
+          return;
+        }
+
+        stopAllAlarms();
+
+        // 직접 입력 칸에 숫자를 적어 두고 [설정]을 안 누른 채 바로 [시작]을 누른 경우 자동 반영
+        const rawPending = customMinutesInput.value.trim();
+        if (!isRunning && remainingMs === totalDurationMs && rawPending !== "") {
+          const parsed = Number(rawPending);
+          if (!Number.isNaN(parsed) && parsed > 0 && parsed <= TIMER_CONFIG.MAX_CUSTOM_MINUTES) {
+            setTimerMinutes(parsed, false);
+            customMinutesInput.value = "";
+          }
+        }
+
+        // 종료된 상태에서 [다시 시작]을 누르면 원래 시간으로 리셋 후 즉시 출발
+        if (isFinished || remainingMs <= 0) {
+          remainingMs = totalDurationMs;
+          isFinished = false;
+          hasPlayedWarningChime = totalDurationMs <= TIMER_CONFIG.WARNING_SECONDS * 1000;
+        }
+
+        if (isRunning) {
+          // 일시정지
+          remainingMs = Math.max(0, endTimeStamp - Date.now());
+          isRunning = false;
+          clearTimerInterval();
+          setScreenWakeLock(false);
+          renderScreen();
+        } else {
+          // 활동 시작!
+          isRunning = true;
+          endTimeStamp = Date.now() + remainingMs;
+          clearTimerInterval();
+          timerIntervalId = setInterval(tick, 100);
+          setScreenWakeLock(true);
+          playStartCue();
+          pulseDigitsOnce();
+          renderScreen();
+        }
+      }
+
+      /**
+       * [초기화] 단추 클릭 처리
+       */
+      function handleReset() {
+        unlockAudio();
+        setTimerMinutes(selectedMinutes, true);
+      }
+
+      // --- 7. 초기화 및 이벤트 연결 ---
+
+      /**
+       * 설정된 빠른 시간 단추(5분, 10분, 15분)를 생성합니다.
+       */
+      function renderPresetButtons() {
+        presetButtonsContainer.innerHTML = "";
+        TIMER_CONFIG.PRESET_MINUTES.forEach((min) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.setAttribute("data-minutes", String(min));
+          btn.textContent = `${min}분`;
+          btn.addEventListener("click", () => {
+            unlockAudio();
+            customMinutesInput.value = "";
+            setTimerMinutes(min, true);
+          });
+          presetButtonsContainer.appendChild(btn);
+        });
+      }
+
+      /**
+       * 상단 소리 단추 상태를 갱신합니다.
+       */
+      function updateSoundToggleUI() {
+        if (soundEnabled) {
+          soundIcon.textContent = "🔊";
+          soundLabel.textContent = "소리 켜짐";
+          soundToggleBtn.className =
+            "flex items-center gap-2 bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 font-bold text-base sm:text-xl px-4 py-2.5 sm:px-5 sm:py-3 rounded-2xl border-2 border-slate-700 transition-all shadow-sm";
+        } else {
+          soundIcon.textContent = "🔇";
+          soundLabel.textContent = "소리 꺼짐";
+          soundToggleBtn.className =
+            "flex items-center gap-2 bg-slate-900/60 hover:bg-slate-800 active:scale-95 text-slate-500 font-bold text-base sm:text-xl px-4 py-2.5 sm:px-5 sm:py-3 rounded-2xl border-2 border-slate-800 transition-all";
+        }
+      }
+
+      // 소리 켜기/끄기 이벤트 (소리를 켤 때 짧은 확인음이 함께 울림)
+      soundToggleBtn.addEventListener("click", () => {
+        unlockAudio();
+        soundEnabled = !soundEnabled;
+        if (!soundEnabled) {
+          stopAllAlarms();
+        } else {
+          playStartCue();
+        }
+        updateSoundToggleUI();
+      });
+
+      // 직접 시간 입력 적용 이벤트
+      customTimeForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        unlockAudio();
+
+        const raw = customMinutesInput.value.trim();
+        const minutes = Number(raw);
+
+        if (raw === "" || Number.isNaN(minutes) || minutes <= 0 || minutes > TIMER_CONFIG.MAX_CUSTOM_MINUTES) {
+          showToast(`1분부터 ${TIMER_CONFIG.MAX_CUSTOM_MINUTES}분 사이의 숫자를 입력해 주세요`);
+          customMinutesInput.focus();
+          return;
+        }
+
+        setTimerMinutes(minutes, true);
+        customMinutesInput.blur();
+        showToast(`${minutes}분으로 설정되었습니다`);
+      });
+
+      // 시작/일시정지 및 초기화 단추 연결
+      startPauseBtn.addEventListener("click", handlePrimaryAction);
+      resetBtn.addEventListener("click", handleReset);
+
+      // 스페이스바로 시작/일시정지 단축 조작 지원
+      document.addEventListener("keydown", (event) => {
+        if (document.activeElement === customMinutesInput) return;
+        if (event.code === "Space") {
+          event.preventDefault();
+          handlePrimaryAction();
+        }
+      });
+
+      // 앱 초기 구동
+      function init() {
+        appTitle.textContent = TIMER_CONFIG.TITLE;
+        document.title = TIMER_CONFIG.TITLE;
+        customMinutesInput.max = String(TIMER_CONFIG.MAX_CUSTOM_MINUTES);
+        renderPresetButtons();
+        updateSoundToggleUI();
+        setTimerMinutes(TIMER_CONFIG.DEFAULT_MINUTES, false);
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>
